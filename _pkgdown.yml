@@ -1,0 +1,25 @@
+url: https://ojwatson.github.io/nomad/
+
+template:
+  params:
+    theme: flatly
+    bootswatch: flatly
+
+reference:
+- title: "Nomad model"
+  desc: "Creation of a nomad model"
+- contents:
+  - starts_with("nomad_")
+- title: "Modeling and simulation"
+  desc: "Predicting from, summarizing, and checking mobility model objects"
+- contents:
+  - print
+  - summary
+  - check
+  - predict
+  - residuals
+- title: "Data Objects"
+  desc: "Mobility database and Mobility Models database"
+- contents:
+  - mobility_db
+  - model_db

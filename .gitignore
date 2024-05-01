@@ -1,0 +1,14 @@
+.Rproj.user/
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+docs
+inst/doc
+/doc/
+/Meta/
+analysis/dide-context
+*.~lock*
+analysis/data-dhs
+analysis/data-derived/sims
+wc2-5
