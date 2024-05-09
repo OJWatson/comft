@@ -32,7 +32,7 @@ ctx <- context::context_save(
   path = context_name,
   package_sources = conan::conan_sources(
     packages= c(
-      "local::scripts/binaries/magenta_1.3.1.zip",
+      "local::scripts/binaries/magenta_1.3.3.zip",
       "local::scripts/binaries/dde_1.0.2.zip",
       "rrq"),
     repos = "https://mrc-ide.github.io/drat/"
@@ -40,7 +40,7 @@ ctx <- context::context_save(
 )
 
 # set up a specific config for here as we need to specify the large RAM nodes
-config <- didehpc::didehpc_config(use_workers = TRUE, parallel = FALSE, cores = 3)
+config <- didehpc::didehpc_config(use_workers = TRUE, parallel = FALSE, cores = 1)
 
 # Configure the Queue
 obj <- didehpc::queue_didehpc(ctx, config = config)
@@ -53,16 +53,16 @@ obj <- didehpc::queue_didehpc(ctx, config = config)
 #### Parameter Grid ####
 
 # parameter set up
-N <- 100000
+N <- 50000
 tl <- 20
-hd <- 20
+hd <- 5
 nl <- 7
 m <- 0.00084
 
 # Default starting resistance
-crt_76T <- 0.1
+crt_76T <- 0.2
 k13_valid <- 0.1
-mdr1_184F <- 0.2
+mdr1_184F <- 0.4
 mdr1_86Y <- 0.02
 mdr1_CNV <- 0.05
 pfpm23_CNV <- 0.02
@@ -107,15 +107,35 @@ al$lpf <- c(al$lpf, al$lpf)
 # all drugs
 dl <- list(al, asaq, dhappq, aspy)
 
+# now lets reduce the 184F impact
+bittbl <- (vapply(0:127, magenta:::binary, n = 7, numeric(7)) %>% t %>% apply(1,rev) %>% t)
+bittbl <- as.data.frame(cbind(bittbl, cbind(dl[[1]]$lpf, dl[[2]]$lpf, dl[[3]]$lpf, dl[[4]]$lpf)))
+
+for(i in seq_along(bittbl$V1)){
+  if(bittbl$V3[i] == 1) {
+    comp <- (bittbl$V1 == bittbl$V1[[i]] &
+            bittbl$V2 == bittbl$V2[[i]] &
+            bittbl$V4 == bittbl$V4[[i]] &
+            bittbl$V5 == bittbl$V5[[i]] &
+            bittbl$V6 == bittbl$V6[[i]] &
+            bittbl$V7 == bittbl$V7[[i]] &
+            bittbl$V3 == 0)
+    bittbl$V8[i] <-  bittbl$V8[i] + ((bittbl$V8[comp] - bittbl$V8[i])/2)
+  }
+}
+
+# and scale up as AL is too high failure so make comparable to ASAQ
+bittbl$V8 <- 1-(0.7*(1-bittbl$V8))
+dl[[1]]$lpf <- bittbl$V8
+
 ## Now create what we scan over
-EIRs <- c(0.5,1,2,4,8,16,32,64,128)
+EIRs <- c(0.5,1,2,4,8,16,32,64)
 fts <- c(.2,.4,.6,.8)
 num_drugs <- c(2, 3, 4)
+p_tests <- c(.2,.4,.6,.8)
 
 # then specific scenario scans
-cycle_delays <- c(1, 2, 4)
-mft_prop <- c("even", "al_heavy")
-p_tests <- c(.2,.4,.6,.8,.1)
+mft_prop <- c("even")
 al_heavy_ratios <- list(
   c(0.8, 0.2),
   c(4/6, 1/6, 1/6),
@@ -133,6 +153,7 @@ status_quo_grid <- expand.grid(
 status_quo_grid$sequential <- -1
 status_quo_grid$mft_flag <- FALSE
 status_quo_grid$mft_prop <- "even"
+status_quo_grid$temporal_cycling  <- -1
 
 # create our temporal cycling grid
 temporal_cycle_grid <- expand.grid(
@@ -140,11 +161,12 @@ temporal_cycle_grid <- expand.grid(
   ft = fts, 
   p_test = p_tests,
   nd = num_drugs,
-  cycle_delays = cycle_delays
+  temporal_cycling = c(1, 3, 5)
 )
 temporal_cycle_grid$sequential <- -1
 temporal_cycle_grid$mft_flag <- FALSE
 temporal_cycle_grid$mft_prop <- "even"
+temporal_cycle_grid$cycle_delays  <- -1
 
 # create our sequential cycling grid
 sequential_cycle_grid <- expand.grid(
@@ -152,11 +174,12 @@ sequential_cycle_grid <- expand.grid(
   ft = fts, 
   p_test = p_tests,
   nd = num_drugs,
-  cycle_delays = cycle_delays
+  cycle_delays = c(0.5, 2.5, 4.5)
 )
 sequential_cycle_grid$sequential <- 0.15
 sequential_cycle_grid$mft_flag <- FALSE
 sequential_cycle_grid$mft_prop <- "even"
+sequential_cycle_grid$temporal_cycling  <- -1
 
 # create our mft grid
 mft_grid <- expand.grid(
@@ -169,11 +192,12 @@ mft_grid <- expand.grid(
 mft_grid$sequential <- -1
 mft_grid$mft_flag <- TRUE
 mft_grid$cycle_delays <- -1
+mft_grid$temporal_cycling  <- -1
 
 # combine into one
 param_grid <- data.table::rbindlist(
   list(status_quo_grid, sequential_cycle_grid, temporal_cycle_grid, mft_grid),
-                                    use.names = TRUE)
+  use.names = TRUE)
 
 param_grid <- arrange(param_grid, EIR)
 
@@ -194,8 +218,16 @@ try_fail_catch <- function(expr, attempts = 3){
   
 }
 
+# test cases
+i <- 368 # base
+i <- 384 # sequential
+i <- 544 # temporal
+i <- 688 # mft
+
+
+
 for(i in seq_along(param_grid$EIR)){
-  
+  message(i)
   # get partner drug ratios
   if (param_grid$mft_prop[i] == "even") {
     pdr <- rep(1/param_grid$nd[i], param_grid$nd[i])
@@ -205,26 +237,37 @@ for(i in seq_along(param_grid$EIR)){
   
   drug_list <-
     magenta:::drug_list_create(
-      resistance_flag = c(rep(FALSE, hd), rep(TRUE, tl)),
+      resistance_flag = c(rep(FALSE, 1), rep(TRUE, tl+hd-1)),
       mft_flag = param_grid$mft_flag[i],
       artemisinin_loci = 5,
       absolute_fitness_cost_flag = TRUE,
       partner_drug_ratios = pdr,
       drugs = dl[seq_len(param_grid$nd[i])],
-      cost_of_resistance = rep(1 - 0.005, 6),
+      cost_of_resistance = rep(1 - 0.005, 7),
       sequential_cycling = param_grid$sequential[i],
       number_of_drugs = param_grid$nd[i],
       sequential_update = param_grid$cycle_delays[i],
+      temporal_cycling = param_grid$temporal_cycling[i],
       number_of_resistance_loci = nl
     )
   
+  # update this for temporal cycling strategies
+  if(param_grid$temporal_cycling[i]>0) {
+    drug_list$next_temporal_cycle <- hd + param_grid$temporal_cycling[i]
+  }
+  
+  # update this for temporal cycling strategies
+  if(param_grid$sequential[i]>0) {
+    drug_list$next_temporal_cycle <- hd
+  }
+  
   param_list_lmh <- list()
   
-  for(j in 1:2){
+  for(j in 1:50){
     
     param_list_lmh[[j]] <- list(
       EIR = param_grid$EIR[i], 
-      N = 20000, 
+      N = 50000, 
       years = tl+hd,
       itn_cov = 0,
       save_lineages = TRUE,
@@ -292,19 +335,24 @@ for(i in seq_along(param_grid$EIR)){
                                housekeeping_list=x$housekeeping_list,
                                drug_list = x$drug_list, 
                                nmf_list = x$nmf_list, plaf = x$plaf,
-                               island_imports_plaf_linked_flag = x$island_imports_plaf_linked_flag),
-             name = paste0("test_pg_",i))
-    }
-    
-  ))
+                               island_imports_plaf_linked_flag = x$island_imports_plaf_linked_flag))
+    },
+    name = paste0("ALFIX_N_50000_hd_5_tl_20_pg_",i), overwrite = TRUE)
+  )
+  
   
 }
 
 # now submit workers
-workers <- obj$submit_workers(200)
+didehpc::web_login()
+workers <- obj$submit_workers(1500)
 
 # and get the grp list here
-grps <- lapply(obj$task_bundle_list(), function(x){obj$task_bundle_get(x)})
+bundnms <- obj$task_bundle_list()
+bundnms <- grep("ALFIX_N_50000_hd_5", bundnms, value = TRUE)
+bundles <- data.frame(nm = bundnms, i = as.integer(gsub("(.*pg_)(\\d*)","\\2", bundnms)))
+bundles <- arrange(bundles, i)
+grps <- lapply(bundles$nm, function(x){obj$task_bundle_get(x)})
 
 ## ----------------------------------------------------o
 ## 4. Fetch Objects --------------
@@ -317,34 +365,47 @@ dir.create(here::here("analysis/data-derived/sims_test"))
 saveRDS(param_grid, here::here("analysis/data-derived/sims_test/X.rds"))
 
 # Save our simulations across the parameter space
-for(i in seq_along(param_grid$EIR)) {
-  
-  message(i)
-  
-  # create our results
-  r_i <- map(seq_along(grps), function(x) {
-    grps[[x]]$db$get_value(grps[[x]]$db$get_hash(grps[[x]]$tasks[[i]]$id, "task_results"), FALSE)
-  })
-  
-  if(any(unlist(lapply(r_i, object.size))==0)){
-    
-  } else {
-    
-    # remove the final loggers that are very large and unneeded
-    for(x in seq_along(r_i)) {
-      to_rm <- which(names(r_i[[x]][[length(r_i[[x]])]]$Loggers) %in%
-                       c("InfectionStates", "Ages", "IB", "ICA", "ICM", "ID") )
-      r_i[[x]][[length(r_i[[x]])]]$Loggers[to_rm] <- NULL
+for (i in seq_along(param_grid$EIR)) {
+  tryCatch({
+    if (((i) %% 10) == 0) {
+      message(i)
     }
     
-    # and save to file
-    fn_i <- paste0("r_", i, ".rds")
-    saveRDS(r_i, here::here("analysis/data-derived/sims_test", fn_i))
-    gc()
+    # create our results
+    r_i <- map(seq_along(grps[[i]]$tasks), function(x) {
+      grps[[i]]$db$get_value(grps[[i]]$db$get_hash(grps[[i]]$tasks[[x]]$id, "task_results"),
+                             FALSE)
+    })
     
-  }
+    if (any(unlist(lapply(r_i, object.size)) == 0)) {
+      
+    } else {
+      # remove the final loggers that are very large and unneeded
+      for (x in seq_along(r_i)) {
+        r_i[[x]][[length(r_i[[x]])]] <- NULL
+        attributes(r_i[[x]]) <- NULL
+      }
+      
+      # remove the uneeded information
+      to_rm <- c("dat", "mutations", "daily_pop_eir", "lineage")
+      for (x in seq_along(r_i)) {
+        for (j in seq_along(r_i[[x]])) {
+          r_i[[x]][[j]][to_rm] <- NULL
+        }
+      }
+      
+      # and save to file
+      fn_i <- paste0("r_", i, ".rds")
+      saveRDS(r_i,
+              here::here("analysis/data-derived/sims_test", fn_i))
+      gc()
+    }
+  }, error = function(e) {
+    message(paste0("Error at ", i))
+  })
   
 }
+
 
 # These sims have not been pushed to Github due to Github memory/size constraints
 

@@ -19,7 +19,6 @@ Imports:
     magrittr,
     R6,
     purrr,
-    spdep,
     magenta,
     ragg,
     dplyr
