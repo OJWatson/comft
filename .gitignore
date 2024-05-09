@@ -11,4 +11,7 @@ analysis/dide-context
 *.~lock*
 analysis/data-dhs
 analysis/data-derived/sims
+analysis/context-dide
+analysis/data-derived/sims_test/r_[0-9]*\.rds
+analysis/data-derived/sims_test/sims_test\.zip
 wc2-5
